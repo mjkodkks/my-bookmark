@@ -1,5 +1,13 @@
 import { Application, Router } from "https://deno.land/x/oak@v12.1.0/mod.ts";
 import "https://deno.land/std@0.179.0/dotenv/load.ts";
+import { connect } from "https://deno.land/x/redis/mod.ts";
+
+const redis = await connect({
+    hostname: Deno.env.get("REDIS_HOSTNAME") || '',
+    port: Deno.env.get("REDIS_PORT") || '',
+    username: Deno.env.get("REDIS_USER") || '',
+    password: Deno.env.get("REDIS_PASS") || ''
+  });
 
 const consumer_key = Deno.env.get("CONSUMER_KEY")
 let codeAchive = ''
@@ -15,6 +23,12 @@ const router = new Router();
 router
     .get("/", (context) => {
         context.response.body = "Hello World";
+    })
+    .get("/test-redis", async (context) => {
+        const bookmarksString = await redis.get("bookmarks")
+        // console.log(bookmarksString);
+        const template = JSON.parse(bookmarksString || '')
+        context.response.body = template;
     })
     .get("/bookmarks", async (context) => {
         try {
@@ -92,6 +106,7 @@ router
                             time_added,
                     })
                 }
+                redis.set('bookmarks', JSON.stringify(template))
                 context.response.body = template
             }
         } catch (error) {
