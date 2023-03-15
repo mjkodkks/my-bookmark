@@ -12,8 +12,6 @@ const redis = await connect({
 });
 
 const consumer_key = Deno.env.get("CONSUMER_KEY")
-let codeAchive = ''
-let accessToken = ''
 interface IBookmarkResponse {
     item_id: string
     resolved_id: string
@@ -28,23 +26,32 @@ router
         context.response.body = "Hello World";
         context.response.status = 200
     })
-    .get("/test-code", (context) => {
+    .get("/test-code", async (context) => {
         context.response.body = {
-            code: codeAchive,
-            access_token: accessToken
+            code: await redis.get('code'),
+            access_token: await redis.get('access_token')
         };
         context.response.status = 200
     })
     .get("/test-redis-data", async (context) => {
-        const bookmarksString = await redis.get("bookmarks")
-        // console.log(bookmarksString);
-        const template = JSON.parse(bookmarksString || '')
-        context.response.body = template;
-        context.response.status = 200
-    })
+        try {            
+            const bookmarksString = await redis.get("bookmarks")
+            if (bookmarksString) {
+                context.response.body = JSON.parse(bookmarksString);
+                context.response.status = 200
+            } else {
+                throw new Error('no bookmark')
+            }
+        } catch (error) {
+            context.response.body = {
+                message: error.message
+            }
+            context.response.status = 400
+    }})
     .get("/authen", async (context) => {
         try {
-            if (!codeAchive) {
+            const codeRedis = await redis.get('code')
+            if (!codeRedis) {
                 console.log('on request')
                 const getpocketRequestAuth = await fetch('https://getpocket.com/v3/oauth/request', {
                     method: 'POST',
@@ -59,16 +66,16 @@ router
                     }
                 })
                 const { code, state } = await getpocketRequestAuth.json()
-                codeAchive = code
+                redis.set('code', code)
             }
 
-            console.log('codeAchive : ', codeAchive)
+            console.log('code : ', codeRedis)
 
             const getpocketAuth = await fetch('https://getpocket.com/v3/oauth/authorize', {
                 method: 'POST',
                 body: JSON.stringify({
                     consumer_key,
-                    code: codeAchive
+                    code: codeRedis
                 }),
                 headers: {
                     'Content-Type': 'application/json; charset=UTF-8',
@@ -80,12 +87,12 @@ router
                 const redirectUrl = context.request.url.href;
                 console.log(redirectUrl);
                 context.response.status = 403
-                throw new Error(`https://getpocket.com/auth/authorize?request_token=${codeAchive}&redirect_uri=${Deno.env.get("REDIRECT_URL") || redirectUrl}`);
+                throw new Error(`https://getpocket.com/auth/authorize?request_token=${codeRedis}&redirect_uri=${Deno.env.get("REDIRECT_URL") || redirectUrl}`);
             }
             if (getpocketAuth.status === 200) {
                 console.log('case 200')
                 const { access_token } = await getpocketAuth.json();
-                accessToken = access_token
+                redis.set('access_token', access_token)
                 context.response.body = {
                     access_token: access_token
                 }
@@ -101,6 +108,7 @@ router
         try {
             const { favorite = "1", reset = "0" } = getQuery(context)
             const redisBookmark = await redis.get('bookmarks')
+            const access_token = await redis.get('access_token')
             
             if (redisBookmark && redisBookmark.length && reset === "0") {
                 console.info('get bookmark from redis')
@@ -109,7 +117,7 @@ router
                 return
             }
 
-            if (!accessToken) {
+            if (!access_token) {
                 throw new Error(`Access Token not found please authen app`);
             }
 
@@ -117,7 +125,7 @@ router
                 method: 'POST',
                 body: JSON.stringify({
                     consumer_key,
-                    access_token: accessToken,
+                    access_token,
                     state: "all",
                     sort: "newest",
                     detailType: "simple",
@@ -149,6 +157,7 @@ router
             redis.set('bookmarks', JSON.stringify(template), {
                 ex: 5 * 60
             })
+            console.info('new bookmarks')
             context.response.status = 200
             context.response.body = template
 
